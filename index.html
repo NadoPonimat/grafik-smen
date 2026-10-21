@@ -59,7 +59,8 @@ const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&g
 const WD=['Вс','Пн','Вт','Ср','Чт','Пт','Сб'];
 const tm=t=>{const[a,b]=(t||'0:0').split(':');return+a*60+ +b};
 const ivl=(d,sh)=>{const b=Date.parse(d+'T00:00:00Z')/6e4;let s=b+tm(sh.s),e=b+tm(sh.e);if(e<=s)e+=1440;return[s,e]};
-const clash=(a,b)=>a[0]<b[1]+S.gap&&b[0]<a[1]+S.gap;
+const clash=(a,b,g=S.gap)=>a[0]<b[1]+g&&b[0]<a[1]+g;
+const isDbl=(n,w)=>S.wp[w].emps.some(e=>e.n.trim()===n&&e.dbl);
 const days=()=>{const[y,m]=S.month.split('-').map(Number);return Array.from({length:new Date(y,m,0).getDate()},(_,i)=>`${S.month}-${String(i+1).padStart(2,'0')}`)};
 const dow=d=>new Date(d+'T00:00:00Z').getUTCDay();
 const hrs=sh=>{let m=tm(sh.e)-tm(sh.s);if(m<=0)m+=1440;return m/60};
@@ -76,7 +77,7 @@ function busy(name,w,date,si,k){
   const sh=W.shifts[i];if(!sh)continue;
   W.sched[key].forEach((n,idx)=>{
    if(n!==name||(j===w&&key===date+'|'+si&&idx===k))return;
-   if(clash(me,ivl(d,sh))||(S.oneDay!==false&&d===date))r=`${W.name} ${d.slice(8)}.${d.slice(5,7)} ${sh.s}–${sh.e}`;
+   if(clash(me,ivl(d,sh),(j===w&&d===date&&isDbl(name,w))?0:S.gap)||(S.oneDay!==false&&d===date&&!(j===w&&isDbl(name,w))))r=`${W.name} ${d.slice(8)}.${d.slice(5,7)} ${sh.s}–${sh.e}`;
   })}});
  return r}
 
@@ -92,21 +93,23 @@ function addEmp(){S.wp[S.cur].emps.push({n:'',t:0,off:''});go()}
 function delEmp(i){S.wp[S.cur].emps.splice(i,1);go()}
 function clearMonth(){if(!confirm('Очистить график этой работы за месяц?'))return;const W=S.wp[S.cur],ds=new Set(days());for(const k in W.sched)if(ds.has(k.split('|')[0]))delete W.sched[k];go()}
 
+function effT(e,w,ds){if(!e.all)return e.t;const u=new Set(),ms=new Set(ds),o=S.wp[1-w];for(const key in o.sched){const d=key.split('|')[0];if(ms.has(d)&&o.sched[key].includes(e.n.trim()))u.add(d)}return ds.length-u.size}
 // ---------- авто-составление ----------
 function gen(){
  const w=S.cur,W=S.wp[w],ds=days(),keep=$('#keep').checked,mset=new Set(ds);
  const oth=S.wp[1-w],emps=W.emps.filter(e=>e.n.trim()).map(e=>{if(!e.all)return e;const u=new Set();for(const key in oth.sched){const d=key.split('|')[0];if(mset.has(d)&&oth.sched[key].includes(e.n.trim()))u.add(d)}return{...e,t:ds.length-u.size}});
  if(!emps.length)return toast('Сначала добавьте сотрудников в настройках');
  const offs={};emps.forEach(e=>offs[e.n]=parseOff(e.off));
- let best=null,bs=1e18,bm=0;
+ let best=null,bs=1e18,bm=0,bc={};
  for(let it=0;it<400;it++){
-  const sc=[{},{}],ix={},dy={},cnt={};emps.forEach(e=>cnt[e.n]=0);
-  const add=(n,d,sh)=>{(ix[n]=ix[n]||[]).push(ivl(d,sh));(dy[n]=dy[n]||new Set()).add(Math.round(Date.parse(d)/864e5))};
+  const sc=[{},{}],ix={},dy={},cnt={},cd={},od={};emps.forEach(e=>cnt[e.n]=0);
+  const add=(n,d,sh,j)=>{const dn=Math.round(Date.parse(d)/864e5);(ix[n]=ix[n]||[]).push(ivl(d,sh));(dy[n]=dy[n]||new Set()).add(dn);if(j===w)cd[n+'|'+dn]=(cd[n+'|'+dn]||0)+1;else(od[n]=od[n]||new Set()).add(dn)};
   S.wp.forEach((X,j)=>{for(const key in X.sched){
    const[d,i]=key.split('|'),sh=X.shifts[i];if(!sh)continue;
    const inM=mset.has(d);if(j===w&&inM&&!keep)continue;
    const arr=X.sched[key].slice();sc[j][key]=arr;
-   arr.forEach(n=>{if(n){add(n,d,sh);if(j===w&&inM&&n in cnt)cnt[n]++}})}});
+   arr.forEach(n=>{if(n){add(n,d,sh,j);if(j===w&&inM&&n in cnt)cnt[n]++}})}});
+  const lock=new Set();for(const key in sc[w]){if(mset.has(key.split('|')[0]))sc[w][key].forEach((n,k)=>{if(n)lock.add(key+'#'+k)})}
   let miss=0;
   ds.forEach(d=>{const dn=Math.round(Date.parse(d)/864e5),dom=+d.slice(8);
    W.shifts.forEach((sh,si)=>{
@@ -115,23 +118,56 @@ function gen(){
      if(arr[k])continue;let bc=null,bv=-1e9;
      for(const e of emps){const n=e.n;
       if(offs[n].has(dom)||arr.includes(n))continue;
-      if((ix[n]||[]).some(x=>clash(me,x)))continue;
+      if((ix[n]||[]).some(x=>clash(me,x,e.dbl?0:S.gap)))continue;
       const D=dy[n]||new Set();let r=1,a=dn-1,b=dn+1;while(D.has(a)){r++;a--}while(D.has(b)){r++;b++}
-      if(r>S.maxRun||(S.oneDay!==false&&D.has(dn)))continue;
+      if(r>S.maxRun)continue;
+      if(e.dbl){if(od[n]&&od[n].has(dn)&&S.oneDay!==false)continue;if((cd[n+'|'+dn]||0)>=2)continue}else if(S.oneDay!==false&&D.has(dn))continue;
       let v=(e.t>0?e.t:0)-cnt[n]+Math.random()*1.5;
       if(e.t>0&&cnt[n]>=e.t)v-=50;
       if(D.has(dn-1))v-=.8;
+      if(e.dbl&&!(e.t>0&&cnt[n]>=e.t)){if((cd[n+'|'+dn]||0)===1)v+=8;else if(si===0)v+=3}
       if(v>bv){bv=v;bc=n}}
-     if(bc){arr[k]=bc;add(bc,d,sh);cnt[bc]++}else{arr[k]='';miss++}}
+     if(bc){arr[k]=bc;add(bc,d,sh,w);cnt[bc]++}else{arr[k]='';miss++}}
     for(let k=0;k<sh.need;k++)if(!arr[k])arr[k]='';
    })});
-  const c=emps.map(e=>cnt[e.n]);
-  let s=miss*1000+(Math.max(...c)-Math.min(...c))*2;
+  // ---- доводка: закрыть пустые места и выровнять количество смен по целям ----
+  const okFor=(n,d,si,self)=>{
+   if(offs[n].has(+d.slice(8)))return false;
+   const me=ivl(d,W.shifts[si]),dn=Math.round(Date.parse(d)/864e5),D=new Set([dn]),dbl=!!(emps.find(e=>e.n===n)||{}).dbl;let bad=false,same=0;
+   for(let j=0;j<2;j++){const X=S.wp[j];for(const key in sc[j]){
+    const arr=sc[j][key];if(!arr.includes(n))continue;
+    const[d2,i2]=key.split('|'),sh2=X.shifts[i2];if(!sh2)continue;
+    arr.forEach((m,idx)=>{if(m!==n||(j===w&&key===self[0]&&idx===self[1]))return;
+     if((S.oneDay!==false&&d2===d&&!(dbl&&j===w))||clash(me,ivl(d2,sh2),dbl?0:S.gap))bad=true;if(j===w&&d2===d)same++;
+     D.add(Math.round(Date.parse(d2)/864e5))})}}
+   if(bad||same>=2)return false;
+   let r=1,a=dn-1,b=dn+1;while(D.has(a)){r++;a--}while(D.has(b)){r++;b++}
+   return r<=S.maxRun};
+  const cells=[];ds.forEach(d=>W.shifts.forEach((sh,si)=>{for(let k=0;k<sh.need;k++)cells.push([d,si,k,d+'|'+si])}));
+  const setc=(c,v)=>{const a=sc[w][c[3]],o=a[c[2]];if(o&&o in cnt)cnt[o]--;a[c[2]]=v;if(v&&v in cnt)cnt[v]++};
+  for(let pass=0;pass<80;pass++){let mv=false;
+   for(const c of cells){if(sc[w][c[3]][c[2]])continue;
+    let bn=null,bv=-1e9;
+    for(const e of emps){if(!okFor(e.n,c[0],c[1],[c[3],c[2]]))continue;
+     const v=(e.t>0?e.t:0)-cnt[e.n]-(e.t>0&&cnt[e.n]>=e.t?50:0);if(v>bv){bv=v;bn=e.n}}
+    if(bn){setc(c,bn);mv=true}}
+   for(const A of emps){if(!(A.t>0))continue;
+    for(const B of emps){if(!(cnt[B.n]<B.t))continue;
+     for(const c of cells){if(cnt[A.n]<=A.t)break;
+      if(sc[w][c[3]][c[2]]!==A.n||lock.has(c[3]+'#'+c[2]))continue;
+      if(A.dbl&&pass<40&&W.shifts.some((_,s2)=>s2!==c[1]&&(sc[w][c[0]+'|'+s2]||[]).includes(A.n)))continue;
+      if(okFor(B.n,c[0],c[1],[c[3],c[2]])){setc(c,B.n);mv=true}}}}
+   if(!mv){if(pass<40)pass=39;else break}}
+  miss=0;cells.forEach(c=>{if(!sc[w][c[3]][c[2]])miss++});
+  let s=miss*1000;const fr=emps.filter(e=>!(e.t>0)).map(e=>cnt[e.n]);
+  if(fr.length>1)s+=(Math.max(...fr)-Math.min(...fr))*2;
   emps.forEach(e=>{if(e.t>0)s+=Math.abs(cnt[e.n]-e.t)*10});
-  if(s<bs){bs=s;best=sc[w];bm=miss}
+  ds.forEach(d=>emps.forEach(e=>{if(!e.dbl)return;let q=0;W.shifts.forEach((_,si)=>{if((sc[w][d+'|'+si]||[]).includes(e.n))q++});if(q>=2)s-=3}));
+  if(s<bs){bs=s;best=sc[w];bm=miss;bc=cnt}
   if(s===0)break}
  W.sched=best;go();
- toast(bm?`Не удалось закрыть мест: ${bm}. Добавьте сотрудников или уменьшите ограничения.`:'График составлен. Проверьте и поправьте вручную, если нужно.')}
+ const bad=emps.filter(e=>e.t>0&&bc[e.n]!==e.t).map(e=>`${e.n}: ${bc[e.n]} из ${e.t}`);
+ toast(bm?`Не удалось закрыть мест: ${bm}. Проверьте «макс. дней подряд», «один день — одна работа» и выходные.`:bad.length?`График составлен, но цели не достигнуты — ${bad.join('; ')}. Проверьте «макс. дней подряд» и другую работу.`:'График составлен точно по целям.')}
 
 // ---------- вывод ----------
 function render(){
@@ -149,11 +185,12 @@ function render(){
  <button class="x" onclick="delSh(${i})" title="Удалить">✕</button></div>`).join('')+
  `<div><button onclick="addSh()">+ Добавить смену</button></div>
  <h3>Сотрудники</h3>
- <div class="hint">Если вы работаете в обеих местах — впишите себя с одним и тем же именем в обеих работах. Тогда пересекающиеся смены будут блокироваться. «Смен за месяц» — желаемое число (0 — без цели). Галочка «все дни, свободные на другой работе» сама ставит цель: все дни месяца, когда вы не заняты на другой работе (сначала составьте график той работы). «Выходные» — числа месяца, например 3, 10-12.</div>`+
+ <div class="hint">Если вы работаете в обеих местах — впишите себя с одним и тем же именем в обеих работах. Тогда пересекающиеся смены будут блокироваться. «Смен за месяц» — желаемое число (0 — без цели). Галочка «приоритет: две смены в один день» — программа старается ставить этого сотрудника на две смены подряд в один день (максимум две; можно отметить нескольких). Галочка «все дни, свободные на другой работе» сама ставит цель: все дни месяца, когда вы не заняты на другой работе (сначала составьте график той работы). «Выходные» — числа месяца, например 3, 10-12.</div>`+
  W.emps.map((e,i)=>`<div class="row"><input class="nm" placeholder="Имя" value="${esc(e.n)}" onchange="setEmp(${i},'n',this.value)">
- <label>смен за месяц <input type="number" min="0" value="${e.t}" onchange="setEmp(${i},'t',this.value)"></label>
+ <label>смен за месяц <input type="number" min="0" value="${e.all?effT(e,w,ds):e.t}" ${e.all?'disabled title="Считается автоматически"':''} onchange="setEmp(${i},'t',this.value)"></label>
  <label>выходные <input class="nm" value="${esc(e.off)}" onchange="setEmp(${i},'off',this.value)"></label>
  <label><input type="checkbox" style="min-height:0" ${e.all?'checked':''} onchange="setEmp(${i},'all',this.checked)"> все дни, свободные на другой работе</label>
+ <label><input type="checkbox" style="min-height:0" ${e.dbl?'checked':''} onchange="setEmp(${i},'dbl',this.checked)"> приоритет: две смены в один день</label>
  <button class="x" onclick="delEmp(${i})" title="Удалить">✕</button></div>`).join('')+
  `<div><button onclick="addEmp()">+ Добавить сотрудника</button></div></div></details>
  <div class="row" style="margin-bottom:10px"><button class="p" onclick="gen()">Составить график</button>
@@ -176,7 +213,7 @@ function render(){
   h+='</tr>'});
  h+='</tbody></table></div>';
  // итоги
- const rows=names.map(n=>{const r=stats(n,w,ds),e=W.emps.find(x=>x.n.trim()===n);return`<tr><td>${esc(n)}</td><td>${r.c}</td><td>${+r.t.toFixed(1)}</td><td>${e.t||'—'}</td><td>${fmt(r.m)}</td><td>${r.o}</td><td>${fmt(r.m+r.mo)}</td></tr>`}).join('');
+ const rows=names.map(n=>{const r=stats(n,w,ds),e=W.emps.find(x=>x.n.trim()===n);return`<tr><td>${esc(n)}</td><td>${r.c}</td><td>${+r.t.toFixed(1)}</td><td>${effT(e,w,ds)||'—'}</td><td>${fmt(r.m)}</td><td>${r.o}</td><td>${fmt(r.m+r.mo)}</td></tr>`}).join('');
  h+=`<div class="wrap"><table><thead><tr><th>Сотрудник</th><th>Смен</th><th>Часов</th><th>Цель</th><th>Сумма</th><th>Смен в др. работе</th><th>Итого с двух работ</th></tr></thead><tbody>${rows||'<tr><td colspan=7>Добавьте сотрудников</td></tr>'}</tbody></table></div>`;
  $('#app').innerHTML=h}
 
